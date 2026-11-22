@@ -1,0 +1,19 @@
+#!/bin/tcsh
+#
+if ( -d dev ) then
+  echo "Device cataloge already exists, aborting..."
+  endif
+#  
+mkdir dev
+#
+ln -s /dev/serial/by-id/usb-FTDI_FT232R_USB_UART_AC00DJQW-if00-port0 dev/CW0
+ln -s /dev/serial/by-id/usb-FTDI_FT232R_USB_UART_AC00DI6D-if00-port0 dev/CW1
+ln -s /dev/serial/by-id/usb-FTDI_FT232R_USB_UART_AC008UZZ-if00-port0 dev/CW2
+ln -s /dev/serial/by-id/usb-FTDI_FT232R_USB_UART_AC00B2ZY-if00-port0 dev/CW3
+ln -s /dev/serial/by-id/usb-FTDI_FT232R_USB_UART_AC008USG-if00-port0 dev/CW4
+ln -s /dev/serial/by-id/usb-FTDI_FT232R_USB_UART_AK061JNP-if00-port0 dev/CW5
+ln -s /dev/serial/by-id/usb-FTDI_FT232R_USB_UART_AC00B34O-if00-port0 dev/CW6
+ln -s /dev/serial/by-id/usb-FTDI_FT232R_USB_UART_AK061K0A-if00-port0 dev/CW7
+#
+ls -l dev/CW*
+#

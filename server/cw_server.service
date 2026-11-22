@@ -1,0 +1,32 @@
+# systemd unit for the CosmicWatch web scheduler (cw_server.py)
+#
+# Install (adjust User and the paths first):
+#   sudo cp cw_server.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now cw_server      # start now and at every boot
+#   systemctl status cw_server                 # check
+#   journalctl -u cw_server -f                 # follow the server output
+#
+# Run as the normal lab user (NOT root): that user must be in the groups
+# gpio and i2c (motor_control.py), and cw_reader needs
+#   sudo setcap cap_sys_nice,cap_ipc_lock=ep /path/to/cw_reader
+
+[Unit]
+Description=CosmicWatch web scheduler
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=doroba
+WorkingDirectory=/home/doroba/CW/server
+ExecStart=/usr/bin/python3 /home/doroba/CW/server/cw_server.py 8080
+Environment=CW_DATA_ROOT=/home/doroba/cw_data
+# Environment=CW_SCHEDULER=/home/doroba/CW/scheduler/cw_scheduler.py
+Environment=PYTHONUNBUFFERED=1
+# Stop = like Ctrl-C: the running observation is ended cleanly first
+KillSignal=SIGINT
+TimeoutStopSec=60
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

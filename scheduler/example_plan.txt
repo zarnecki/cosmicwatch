@@ -1,0 +1,12 @@
+# Observation plan for cw_scheduler.py
+# One observation per line:  angle [deg, -90..90]   time [h/m/s, 10s..24h]   output file
+# Output files are written in the directory of this plan; they must not exist yet.
+# File names: letters, digits, _ - . + only (no spaces).  Text after '#' is ignored.
+#
+# angle   time    file
+   0      1h      zenith_000.txt
+  30      1h30m   tilt_p30.txt
+ -30      90m     tilt_m30.txt
+  60      2h      tilt_p60.txt
+ -60      2h      tilt_m60.txt
+  90      3h      horizontal_p90.txt
