@@ -26,6 +26,11 @@ Work flow in the browser
   "Stop plan" ends the current step cleanly (motor switched off, data file
   closed) and skips the rest. "New session" returns to step 1.
 
+The plan page shows the expected data size (MB_PER_HOUR per hour of data
+taking) and the free disk space; the plan cannot be started if the space is
+not sufficient ("Recheck disk space" after cleaning). Below 1 GB a warning
+is shown.
+
 There is one plan at a time (one detector set-up); every browser sees the
 same state. No passwords - meant for the lab network only.
 
@@ -40,6 +45,7 @@ import importlib.util
 import json
 import os
 import re
+import shutil
 import signal
 import sys
 import tarfile
@@ -56,6 +62,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 PORT = int(os.environ.get("CW_SERVER_PORT", "8080"))
 DATA_ROOT = os.path.expanduser(os.environ.get("CW_DATA_ROOT", "~/cw_data"))
 REFRESH_RUNNING = int(os.environ.get("CW_REFRESH", "600"))     # s, page reload while running
+MB_PER_HOUR = float(os.environ.get("CW_MB_PER_HOUR", "1.4"))  # expected disk use per hour of data taking
+                                       # (~1 MB data + ~40% for the final .tar.gz archive)
+LOW_DISK_GB = 1.0                      # warn if less free space than this
 # cw_scheduler.py: next to this file, or in ../scheduler, or given explicitly
 SCHEDULER_CANDIDATES = [os.environ.get("CW_SCHEDULER", ""),
                         os.path.join(HERE, "cw_scheduler.py"),
@@ -96,6 +105,42 @@ STATE = {
 
 def msg(text, ok=False):
     STATE["message"], STATE["msg_ok"] = text, ok
+
+def fmt_long(sec):
+    """Duration for the pages: like cw_scheduler.fmt_time, with days above 24 h (e.g. 2d 05h 30m)."""
+    sec = int(round(max(sec, 0)))
+    if sec < 86400:
+        return S.fmt_time(sec)
+    d, rest = divmod(sec, 86400)
+    return f"{d}d {rest // 3600:02d}h {rest % 3600 // 60:02d}m"
+
+def fmt_size(mb):
+    return f"{mb / 1000:.2f} GB" if mb >= 1000 else f"{mb:.0f} MB" if mb >= 10 else f"{mb:.1f} MB"
+
+def free_mb():
+    """Free disk space for the data directory in MB (None if it cannot be determined)."""
+    try:
+        return shutil.disk_usage(STATE["dir"] or DATA_ROOT).free / 1e6
+    except OSError:
+        return None
+
+def disk_check(steps):
+    """(needed MB, free MB, html block, ok_to_start) for the given plan."""
+    need = sum(st["seconds"] for st in steps) / 3600 * MB_PER_HOUR
+    free = free_mb()
+    if free is None:
+        return need, None, "<div class='warn'>WARNING: free disk space could not be determined.</div>", True
+    line = (f"Expected data size <b>{fmt_size(need)}</b> ({MB_PER_HOUR:g} MB per hour of data taking, "
+            f"incl. the final .tar.gz); free disk space <b>{fmt_size(free)}</b>.")
+    ok = free >= need
+    if not ok:
+        block = (f"<div class='msg err'>{line}<br>NOT ENOUGH DISK SPACE for this plan – free some space "
+                 f"(or shorten the plan) and press \"Recheck disk space\".</div>")
+    elif free < LOW_DISK_GB * 1000:
+        block = f"<div class='warn'>{line}<br>WARNING: less than {LOW_DISK_GB:g} GB of free disk space.</div>"
+    else:
+        block = f"<p>{line}</p>"
+    return need, free, block, ok
 
 #------------------------------------------------------------------------
 # Checking of one observation (same rules as cw_scheduler.check_plan)
@@ -310,7 +355,7 @@ def plan_table(editing):
                     status += " (" + "; ".join(st["notes"]) + ")"
             if state == "reading":
                 left = st["seconds"] - (time.time() - st["t_read"])
-                status += f" about {S.fmt_time(max(left, 0))} left"
+                status += f" about {fmt_long(left)} left"
             reached = f"{st['reached']:.2f}" if st.get("reached") is not None else ""
             meas = S.fmt_time(st["read_time"]) if "read_time" in st else ""
             ev = str(st["events"]) if "events" in st else ""
@@ -329,11 +374,18 @@ def page_editing():
     if steps:
         total = S.estimate([dict(st) for st in steps])
         data = sum(st["seconds"] for st in steps)
-        est = (f"<p>Data taking time <b>{S.fmt_time(data)}</b>, expected total time "
-               f"<b>{S.fmt_time(total)}</b> (incl. positioning).</p>")
+        est = (f"<p>Data taking time <b>{fmt_long(data)}</b>, expected total time "
+               f"<b>{fmt_long(total)}</b> (incl. positioning).</p>")
+    need, free, disk_html, disk_ok = disk_check(steps)
+    if not steps:
+        disk_html = (f"<p>Free disk space <b>{fmt_size(free)}</b>.</p>" if free is not None else "")
+        if free is not None and free < LOW_DISK_GB * 1000:
+            disk_html = (f"<div class='warn'>Free disk space {fmt_size(free)} – WARNING: less than "
+                         f"{LOW_DISK_GB:g} GB.</div>")
+    est += disk_html + ("<form method='get' action='/'><button>Recheck disk space</button></form>")
     warn = "".join(f"<div class='warn'>WARNING: {html.escape(w)}</div>" for w in STATE["setup_warnings"])
     errs = "".join(f"<div class='msg err'>SETUP ERROR: {html.escape(e)}</div>" for e in STATE["setup_errors"])
-    start_btn = ("" if not steps or STATE["setup_errors"] else
+    start_btn = ("" if not steps or STATE["setup_errors"] or not disk_ok else
                  "<form method='post' action='/run' onsubmit=\"return confirm('Start the plan now?')\">"
                  "<button type='submit'><b>Start plan</b></button></form>")
     body = (message_html() + user_line() + "<h2>Observation plan</h2>" + plan_table(True) + est + """
@@ -364,9 +416,10 @@ def page_running():
     if st_cur is not None and st_cur.get("state") == "reading":
         total_left += max(0, st_cur["seconds"] - (now - st_cur["t_read"]))
     body = (message_html() + user_line()
-            + f"<p>Plan running since {datetime.datetime.fromtimestamp(STATE['t_start']):%H:%M:%S} – "
-              f"{done} of {len(STATE['steps'])} observations done, about {S.fmt_time(total_left)} "
+            + f"<p>Plan running since {datetime.datetime.fromtimestamp(STATE['t_start']):%Y-%m-%d %H:%M:%S} – "
+              f"{done} of {len(STATE['steps'])} observations done, about {fmt_long(total_left)} "
               f"of data taking left.</p>"
+            + disk_running()
             + f"<p class='small'>This page reloads itself every {REFRESH_RUNNING // 60} min "
               f"(last update {datetime.datetime.now():%H:%M:%S}).</p>"
             + "<form method='get' action='/'><button>Refresh now</button></form>"
@@ -378,6 +431,19 @@ def page_running():
                "The current observation is ended and the rest is skipped.')\">"
                "<button>Stop plan</button></form>"))
     return page("plan running", body, refresh=REFRESH_RUNNING)
+
+def disk_running():
+    free = free_mb()
+    if free is None:
+        return ""
+    left = sum(st["seconds"] for st in STATE["steps"] if st.get("state") not in ("done", "failed"))
+    need = left / 3600 * MB_PER_HOUR
+    if free < need:
+        return (f"<div class='msg err'>Free disk space {fmt_size(free)} is LESS than the about "
+                f"{fmt_size(need)} still needed – please free some space.</div>")
+    if free < LOW_DISK_GB * 1000:
+        return f"<div class='warn'>Free disk space {fmt_size(free)} – WARNING: less than {LOW_DISK_GB:g} GB.</div>"
+    return f"<p class='small'>Free disk space {fmt_size(free)} (about {fmt_size(need)} still needed).</p>"
 
 def page_finished():
     result = STATE["result"]
@@ -565,6 +631,9 @@ class Handler(BaseHTTPRequestHandler):
         write_plan(plan, STATE["steps"])
         steps, errors = S.check_plan(plan)            # final check, exactly as the command line
         setup, setup_errors = S.resolve_setup()
+        need, free, _, disk_ok = disk_check(STATE["steps"])
+        if not disk_ok:
+            errors.append(f"not enough disk space: about {fmt_size(need)} needed, {fmt_size(free)} free")
         if errors or setup_errors:
             return msg("Plan not started:\n" + "\n".join(errors + setup_errors))
         for st in steps:                              # check_plan steps carry line/path
