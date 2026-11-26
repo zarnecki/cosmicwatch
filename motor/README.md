@@ -17,7 +17,7 @@ Turns the rotating detector mount to a requested angle.
 
 `move_to(target)`: read the position (median of 5 encoder reads), make the required
 number of steps, then read the position every second; the move is done after 3
-consecutive reads within ±0.5° of the target, otherwise a correction move is made
+consecutive reads within ±0.2° of the target (`ANGLE_TOLERANCE`), otherwise a correction move is made
 (at most 10). Allowed range of targets: ±96° (the scheduler limits plans to ±90° and uses
 the extra range for approaching the target from the other side).
 
@@ -43,9 +43,18 @@ python3 motor_control.py <angle>
 
 Moves to the angle, switches the motor **off**, reads the position 3 times and prints:
 initial position, position after movement, position after motor off (and a WARNING if
-the mount moved by more than 0.5° after the motor was switched off).
+the mount moved by more than 0.5° after the motor was switched off, `OFF_SHIFT_TOLERANCE`).
 Exit code: 0 = OK, 1 = problem (target not reached, shift after motor off, encoder
 error, Ctrl-C), 2 = bad argument.
+
+**Read-only mode** (used by the scheduler after each readout):
+
+```
+python3 motor_control.py read
+```
+
+Prints `HH:MM:SS : current position  xx.xx deg` without touching the motor (it stays off).
+Exit code: 0 = OK, 1 = encoder not readable.
 
 ## Known features
 

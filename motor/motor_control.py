@@ -85,7 +85,8 @@ class HR8825:
 
 motor = HR8825(dir_pin=24, step_pin=18, enable_pin=4, mode_pins=(21, 22, 27))
 motor.SetMicroStep('softward', 'fullstep')
-time.sleep(2)
+if not (len(sys.argv) == 2 and sys.argv[1].lower() == "read"):   # read-only mode: motor not used
+    time.sleep(2)
 
 #=======================================
 # Encoder configuration
@@ -150,7 +151,9 @@ DEG_PER_STEP = 360.0 / MOTOR_STEPS_PER_REV * GEAR_RATIO   # 0.288 deg
 STEP_SIGN = -1               # sign of the level-angle change for a 'forward' step
 STEP_DELAY = 0.025           # s, half period of the step signal (20 steps/s)
 
-ANGLE_TOLERANCE = 0.5        # deg, accepted deviation from the requested angle
+ANGLE_TOLERANCE = 0.2        # deg, accepted deviation from the requested angle (motor on);
+                             # 0.5 until 25 Nov 2026 - the full +-0.5 was used (random-position test)
+OFF_SHIFT_TOLERANCE = 0.5    # deg, change after motor off that gives a WARNING (single-move mode)
 N_STABLE_READS = 3           # consecutive reads within tolerance = move completed
 READ_INTERVAL = 1.0          # s, time between the checking reads
 MAX_CORRECTIONS = 10         # give up after this many correction moves
@@ -231,7 +234,7 @@ def move_to(target, verbose=True):
 # Moves to the angle (with checks/corrections), switches the motor off,
 # reads the position N_STABLE_READS times OFF_READ_INTERVAL apart and exits.
 # Prints: initial position, position after movement, position after motor
-# off, plus a warning if the position moved by more than ANGLE_TOLERANCE
+# off, plus a warning if the position moved by more than OFF_SHIFT_TOLERANCE
 # after switching off. Exit code 0 = OK, 1 = problem, 2 = bad argument.
 
 OFF_READ_INTERVAL = 0.5      # s, time between reads after the motor is switched off
@@ -265,14 +268,30 @@ def single_move(arg):
     valid = [p for p in off if p is not None]
     if pos1 is not None and valid:
         shift = max(valid, key=lambda p: abs(p - pos1)) - pos1
-        if abs(shift) > ANGLE_TOLERANCE:
+        if abs(shift) > OFF_SHIFT_TOLERANCE:
             print(f"{stamp()} : WARNING: position changed by {shift:+.2f} deg after motor off "
-                  f"(tolerance {ANGLE_TOLERANCE} deg)")
+                  f"(tolerance {OFF_SHIFT_TOLERANCE} deg)")
             ok = False
     elif not valid:
         print(f"{stamp()} : ERROR: encoder not readable after motor off")
         ok = False
     return 0 if ok else 1
+
+#------------------------------------------------------------------------
+# Read-only mode: motor_control.py read
+#
+# Reads the position without touching the motor (it stays off) and prints
+#   HH:MM:SS : current position           xx.xx deg
+# Exit code 0 = OK, 1 = encoder not readable. Used by the scheduler after
+# each readout to check that the mount did not move during data taking.
+
+def read_only():
+    pos = read_position()
+    print(f"{stamp()} : current position         {fmt(pos)} deg")
+    if pos is None:
+        print(f"{stamp()} : ERROR: encoder not readable")
+        return 1
+    return 0
 
 #------------------------------------------------------------------------
 # Main
@@ -307,13 +326,15 @@ def interactive():
     print("Exiting...")
 
 if len(sys.argv) > 2:
-    print(f"usage: {sys.argv[0]} [angle]   (no argument = interactive mode)")
+    print(f"usage: {sys.argv[0]} [angle | read]   (no argument = interactive mode)")
     GPIO.cleanup(); bus.close()
     sys.exit(2)
 
 status = 0
 try:
-    if len(sys.argv) == 2:
+    if len(sys.argv) == 2 and sys.argv[1].lower() == "read":
+        status = read_only()
+    elif len(sys.argv) == 2:
         status = single_move(sys.argv[1])
     else:
         interactive()

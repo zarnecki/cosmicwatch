@@ -27,6 +27,9 @@ For every line the scheduler
   1. moves the mount:   python3 motor_control.py <angle>
   2. collects data:     cw_reader <plan_dir>/<output_file> <seconds>
                         (started in the directory that contains dev/CW0..7)
+  3. checks the mount:  python3 motor_control.py read
+                        (position after data taking; a change of more than
+                        POSITION_TOLERANCE is reported as a warning and a note)
 The plan is checked completely before anything is moved. After the check
 the expected total time is shown and the plan starts only after confirmation.
 Everything shown on the screen is also written to a log file next to the
@@ -70,7 +73,9 @@ ANGLE_RE = re.compile(r"^[+-]?(\d+(\.\d*)?|\.\d+)$")
 
 # Positioning and handling of problems during the run
 POSITION_TOLERANCE = 0.5  # deg; final position (after motor off) farther from the target
-                          # -> correction (same value as ANGLE_TOLERANCE in motor_control.py)
+                          # -> correction (motor_control.py positions to ANGLE_TOLERANCE = 0.2
+                          # with the motor on; this limit is for the position after motor off).
+                          # Also the limit for a change of the position during data taking.
 MAX_CORRECTIONS = 3       # corrections after the first move; each one approaches the
                           # target from the other side: first OVERSHOOT deg past the target
                           # (in the direction of the first move), then back to the target
@@ -342,6 +347,7 @@ OPENED_RE = re.compile(r"only (\d+) of (\d+) detectors opened")
 NOTREADY_RE = re.compile(r"detector\(s\)([\d ]+) not ready")
 JOINED_RE = re.compile(r"Detector (\d+) .* joined ([\d.]+) s after the start")
 GAPS_RE = re.compile(r"^Gaps without data > (\d+) s: (.*)$")      # cw_reader >= 20261117b
+CURRENT_RE = re.compile(r"current position\s+(-?\d+\.\d+)")      # motor_control.py read
 
 def move_motor(setup, angle):
     """One call of motor_control.py <angle>.
@@ -427,6 +433,40 @@ def do_position(st, setup):
             f"{pos:.2f} deg (actual angle logged)", stamp=True)
     return True, False
 
+def read_mount(setup):
+    """Position of the mount without moving it (motor_control.py read).
+    Returns (position or None, interrupted)."""
+    cmd = [setup["PYTHON"], "-u", setup["MOTOR_CONTROL"], "read"]
+    code, lines, intr = run_command(cmd, os.path.dirname(setup["MOTOR_CONTROL"]), "[motor]")
+    pos = None
+    for l in lines:
+        m = CURRENT_RE.search(l)
+        if m:
+            pos = float(m.group(1))
+    return pos, intr
+
+def check_after_readout(st, setup):
+    """Read the position after data taking and compare it with the position at the
+    start (st['reached']). Data stay valid; a change > POSITION_TOLERANCE or an
+    unknown position is reported (WARNING line + note in the summary).
+    Returns interrupted."""
+    pos, intr = read_mount(setup)
+    st["end_pos"] = pos
+    if intr:
+        return True
+    if pos is None:
+        st["notes"].append("position after data taking unknown (encoder error)")
+        out("WARNING: position after data taking could not be read", stamp=True)
+        return False
+    change = pos - st["reached"]
+    out(f"position after data taking {pos:.2f} deg ({change:+.2f} deg during data taking)", stamp=True)
+    if abs(change) > POSITION_TOLERANCE:
+        st["notes"].append(f"mount moved {change:+.2f} deg during data taking "
+                           f"({st['reached']:.2f} -> {pos:.2f} deg)")
+        out(f"WARNING: mount moved {change:+.2f} deg during data taking "
+            f"({st['reached']:.2f} -> {pos:.2f} deg, tolerance {POSITION_TOLERANCE} deg)", stamp=True)
+    return False
+
 def do_readout(st, setup):
     """Collect data. Returns (go_on, interrupted)."""
     if os.path.lexists(st["path"]):        # cw_reader appends - never mix data
@@ -471,6 +511,9 @@ def do_readout(st, setup):
     if st.get("events", 0) == 0:
         st["notes"].append("no events recorded")
     st["status"] = "OK"
+    if check_after_readout(st, setup):
+        st["status"] = "OK, interrupted while reading the position after data taking"
+        return False, True
     return True, False
 
 #------------------------------------------------------------------------

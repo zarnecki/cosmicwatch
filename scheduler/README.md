@@ -1,8 +1,9 @@
 # Scheduler – `cw_scheduler.py`
 
 Runs an observation plan: a list of mount angles, observation times and output files.
-For every line it moves the mount (`motor_control.py <angle>`) and then takes data
-(`cw_reader <file> <seconds>`).
+For every line it moves the mount (`motor_control.py <angle>`), takes data
+(`cw_reader <file> <seconds>`) and then reads the mount position again
+(`motor_control.py read`).
 
 ## Plan file
 
@@ -33,7 +34,7 @@ Run it as the normal user, **not with sudo** (data and log files would belong to
    `cw_reader`) are checked first; all errors are listed with line numbers.
 2. A table of the plan, the expected total time and finish time are shown; the plan starts
    after confirmation (`y`).
-3. Per observation: positioning, then readout. Everything shown on the screen also goes to
+3. Per observation: positioning, readout, position check. Everything shown on the screen also goes to
    `<plan>_<YYYYmmdd_HHMMSS>.log` next to the plan.
 4. At the end a summary table: target and reached angle, requested and measured time,
    number of events, status and notes (corrections, late detectors, data gaps …).
@@ -50,6 +51,10 @@ error (nothing done).
 - Still more than 5° off (or position unknown) → plan stopped. Otherwise data are taken
   at the reached angle, which is written in the log and summary.
 - Readout failed, no output file, or shorter than 95 % of the requested time → plan stopped.
+- After each readout the position is read again. If the mount moved by more than 0.5°
+  during data taking (or the position cannot be read), a WARNING is logged and a note
+  (`mount moved … deg during data taking (A -> B deg)`) is added to the summary; the
+  observation stays OK and the plan continues.
 
 ## Configuration
 
